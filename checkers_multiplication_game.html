@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Checkers × Multiplication (up to 11s)</title>
+  <style>
+    :root{
+      --board-size: 640px;
+      --light: #f0d9b5;
+      --dark: #b58863;
+      --black-piece: #111;
+      --red-piece: #d33;
+      --highlight: rgba(60,180,75,0.45);
+      --accent: #2a7ae2;
+      font-family: system-ui, -apple-system,Segoe UI, Roboto, 'Helvetica Neue', Arial;
+    }
+    body{display:flex;flex-direction:column;align-items:center;gap:18px;padding:18px;background:#f7f7fb;color:#111}
+    h1{margin:0;font-size:20px}
+    .board-wrap{display:flex;gap:20px;align-items:flex-start}
+    #board{width:var(--board-size);height:var(--board-size);display:grid;grid-template-columns:repeat(8,1fr);border-radius:8px;overflow:hidden;box-shadow:0 6px 18px rgba(0,0,0,0.12)}
+    .square{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative}
+    .square.light{background:var(--light)}
+    .square.dark{background:var(--dark)}
+    .square.highlight{box-shadow:inset 0 0 0 4px rgba(255,255,0,0.06), 0 0 0 3px rgba(60,180,75,0.22)}
+    .piece{width:72%;height:72%;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;font-weight:700;cursor:pointer;user-select:none;box-shadow:0 4px 10px rgba(0,0,0,0.25)}
+    .piece.black{background:var(--black-piece)}
+    .piece.red{background:var(--red-piece)}
+    .piece.king{box-shadow:0 6px 14px rgba(0,0,0,0.28), inset 0 -6px 18px rgba(255,255,255,0.04)}
+    .piece .crown{font-size:14px;opacity:0.95}
+    .controls{max-width:300px;display:flex;flex-direction:column;gap:8px}
+    .controls .status{background:#fff;padding:10px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.06)}
+    button{background:var(--accent);color:white;border:0;padding:8px 10px;border-radius:8px;cursor:pointer}
+    .muted{opacity:0.75;font-size:13px}
+    .log{max-height:180px;overflow:auto;background:#fff;padding:8px;border-radius:8px;box-shadow:0 4px 8px rgba(0,0,0,0.05)}
+    /* Modal */
+    .modal-backdrop{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center}
+    .modal{background:#fff;padding:18px;border-radius:10px;max-width:420px;width:92%;box-shadow:0 10px 30px rgba(0,0,0,0.18)}
+    .modal .question{font-size:20px;margin-bottom:10px}
+    .modal input{width:100%;padding:8px;margin-bottom:8px;border-radius:6px;border:1px solid #ddd}
+    .small{font-size:13px;color:#444}
+    @media (max-width:880px){:root{--board-size:360px} .board-wrap{flex-direction:column;align-items:center}}
+  </style>
+</head>
+<body>
+  <h1>Checkers × Multiplication (up to 11 × 11)</h1>
+  <div class="board-wrap">
+    <div id="board" aria-label="checkers board"></div>
+
+    <div class="controls">
+      <div class="status">
+        <div><strong>Turn:</strong> <span id="turnLabel">Black (Teacher)</span></div>
+        <div class="muted">Black = Teacher, Red = Student</div>
+        <div style="margin-top:8px"><strong>Selected:</strong> <span id="selectedLabel">None</span></div>
+        <div style="margin-top:8px"><button id="restartBtn">Restart Game</button></div>
+      </div>
+
+      <div class="log" id="log"></div>
+      <div class="small muted">How to play: Click a piece, then click the square you want to move to. A multiplication question will appear — answer correctly to make the move. Incorrect answer cancels the move and ends your turn.</div>
+    </div>
+  </div>
+
+  <!-- Modal for question -->
+  <div id="modalRoot" style="display:none"></div>
+
+  <script>
+  // ---- Game state and utilities ----
+  const boardEl = document.getElementById('board');
+  const logEl = document.getElementById('log');
+  const turnLabel = document.getElementById('turnLabel');
+  const selectedLabel = document.getElementById('selectedLabel');
+  const restartBtn = document.getElementById('restartBtn');
+  const modalRoot = document.getElementById('modalRoot');
+
+  const SIZE = 8;
+  // board: 2D array, null or {color: 'black'|'red', king: boolean}
+  let board = [];
+  let turn = 'black'; // black starts
+  let selected = null; // {r,c}
+  let mustContinueChain = false; // for multi-capture chaining
+
+  // initialize board to starting checkers position
+  function initBoard(){
+    board = Array.from({length:SIZE},()=>Array(SIZE).fill(null));
+    for(let r=0;r<3;r++){
+      for(let c=0;c<SIZE;c++){
+        if((r+c)%2===1) board[r][c] = {color:'red', king:false};
+      }
+    }
+    for(let r=5;r<8;r++){
+      for(let c=0;c<SIZE;c++){
+        if((r+c)%2===1) board[r][c] = {color:'black', king:false};
+      }
+    }
+    turn = 'black';
+    selected = null;
+    mustContinueChain = false;
+    updateUI();
+    log('Game started. Black (Teacher) goes first.');
+  }
+
+  // render the board HTML
+  function updateUI(){
+    boardEl.innerHTML = '';
+    for(let r=0;r<SIZE;r++){
+      for(let c=0;c<SIZE;c++){
+        const sq = document.createElement('div');
+        sq.className = 'square ' + (((r+c)%2===0)?'light':'dark');
+        sq.dataset.row = r; sq.dataset.col = c;
+        sq.addEventListener('click', onSquareClick);
+        if(selected && selected.r==r && selected.c==c) sq.classList.add('highlight');
+        if(board[r][c]){
+          const p = document.createElement('div');
+          p.className = 'piece ' + board[r][c].color + (board[r][c].king? ' king':'');
+          p.dataset.row = r; p.dataset.col = c;
+          p.innerHTML = board[r][c].king ? '<span class="crown">♛</span>' : '';
+          p.addEventListener('click', (e)=>{ e.stopPropagation(); onPieceClick(r,c) });
+          sq.appendChild(p);
+        }
+        boardEl.appendChild(sq);
+      }
+    }
+    turnLabel.textContent = turn === 'black' ? 'Black (Teacher)' : 'Red (Student)';
+    selectedLabel.textContent = selected ? `${selected.r}, ${selected.c}` : 'None';
+  }
+
+  function log(msg){
+    const d = document.createElement('div'); d.textContent = msg; logEl.prepend(d);
+  }
+
+  // click handlers
+  function onPieceClick(r,c){
+    const piece = board[r][c];
+    if(!piece) return;
+    if(piece.color !== turn){ log("That's not your piece."); return; }
+    // selecting allowed even if there's an active chain for that piece
+    selected = {r,c};
+    updateUI();
+  }
+
+  function onSquareClick(e){
+    const r = Number(e.currentTarget.dataset.row);
+    const c = Number(e.currentTarget.dataset.col);
+    if(!selected){ log('Select a piece first.'); return; }
+    if(selected.r===r && selected.c===c){ selected = null; updateUI(); return; }
+    // Player has chosen a destination — ask multiplication question
+    askMultiplicationQuestion().then(correct=>{
+      if(correct){
+        // attempt to make the move if it's legal
+        const ok = tryMove(selected.r, selected.c, r, c);
+        if(ok){
+          // After a successful capture, check for further capture chains
+          const piece = board[r][c];
+          const more = piece && hasCapture(r,c,piece.color,piece.king);
+          if(ok.captured && more){
+            // continue chain for same player and same piece
+            selected = {r,c};
+            mustContinueChain = true;
+            log(`${turn} captured a piece! Continue chain by selecting another destination for ${r},${c}.`);
+            updateUI();
+            return; // do not switch turn yet
+          }
+          // else end turn
+          selected = null;
+          mustContinueChain = false;
+          switchTurn();
+        } else {
+          log('That destination is not a legal move. You still used your attempt. Turn ends.');
+          // incorrect move usage still ends turn per the rules (player answered correctly but tried illegal move)
+          selected = null; mustContinueChain = false; switchTurn();
+        }
+      } else {
+        log('Incorrect answer — move canceled and turn ends.');
+        // incorrect answer cancels move; selection cleared and turn switches
+        selected = null; mustContinueChain = false; switchTurn();
+      }
+      updateUI();
+    });
+  }
+
+  // Generate and ask multiplication question (1..11 inclusive)
+  function askMultiplicationQuestion(){
+    return new Promise((resolve)=>{
+      const a = randInt(1,11);
+      const b = randInt(1,11);
+      const correct = a*b;
+
+      // build modal
+      modalRoot.innerHTML = '';
+      const backdrop = document.createElement('div'); backdrop.className='modal-backdrop';
+      const modal = document.createElement('div'); modal.className='modal';
+      const q = document.createElement('div'); q.className='question'; q.textContent = `What is ${a} × ${b}?`;
+      const input = document.createElement('input'); input.type='number'; input.placeholder='Your answer'; input.autofocus=true;
+      const info = document.createElement('div'); info.className='small muted'; info.textContent='Answer correctly to make your chosen move.';
+      const btnRow = document.createElement('div'); btnRow.style.display='flex'; btnRow.style.justifyContent='flex-end'; btnRow.style.gap='8px'; btnRow.style.marginTop='10px';
+      const ok = document.createElement('button'); ok.textContent='Submit';
+      const cancel = document.createElement('button'); cancel.textContent='Cancel'; cancel.style.background='#777';
+
+      btnRow.appendChild(cancel); btnRow.appendChild(ok);
+      modal.appendChild(q); modal.appendChild(input); modal.appendChild(info); modal.appendChild(btnRow);
+      backdrop.appendChild(modal); modalRoot.appendChild(backdrop); modalRoot.style.display='block';
+
+      function cleanup(){ modalRoot.innerHTML=''; modalRoot.style.display='none'; }
+
+      cancel.addEventListener('click', ()=>{ cleanup(); resolve(false); });
+      ok.addEventListener('click', ()=>{ const val = Number(input.value); cleanup(); resolve(val === correct); });
+      input.addEventListener('keydown',(ev)=>{ if(ev.key==='Enter') ok.click(); });
+    });
+  }
+
+  // Attempt to move piece from (sr,sc) to (tr,tc). Returns {moved:boolean, captured:boolean} or false if illegal
+  function tryMove(sr,sc,tr,tc){
+    const piece = board[sr][sc];
+    if(!piece) return false;
+    const dr = tr - sr; const dc = tc - sc;
+    const absDr = Math.abs(dr), absDc = Math.abs(dc);
+    // target square must be empty and dark
+    if(board[tr][tc] !== null) return false;
+    if((tr+tc)%2===0) return false; // must land on dark squares
+
+    // determine direction
+    const forward = piece.color === 'black' ? -1 : 1; // black moves up (toward row0), red moves down (toward row7)
+
+    // simple move
+    if(!piece.king && absDr === 1 && absDc === 1 && dr === forward){
+      board[tr][tc] = piece; board[sr][sc] = null;
+      maybeKing(tr,tc);
+      return {moved:true, captured:false};
+    }
+    if(piece.king && absDr===1 && absDc===1){
+      board[tr][tc] = piece; board[sr][sc] = null; maybeKing(tr,tc); return {moved:true, captured:false};
+    }
+    // capture move
+    if(absDr===2 && absDc===2){
+      const mr = (sr+tr)/2; const mc = (sc+tc)/2; const mid = board[mr][mc];
+      if(mid && mid.color !== piece.color){
+        // capture
+        board[tr][tc] = piece; board[sr][sc] = null; board[mr][mc] = null;
+        maybeKing(tr,tc);
+        return {moved:true, captured:true};
+      }
+    }
+
+    return false;
+  }
+
+  function maybeKing(r,c){
+    const p = board[r][c]; if(!p) return;
+    if(!p.king){
+      if(p.color==='black' && r===0) { p.king=true; log('Black piece crowned (king)!'); }
+      if(p.color==='red' && r===SIZE-1) { p.king=true; log('Red piece crowned (king)!'); }
+    }
+  }
+
+  function hasCapture(r,c,color,king){
+    const dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+    for(const [dr,dc] of dirs){
+      const nr = r + dr; const nc = c + dc; const jr = r + 2*dr; const jc = c + 2*dc;
+      if(inBounds(nr,nc) && inBounds(jr,jc)){
+        const mid = board[nr][nc]; if(mid && mid.color !== color && board[jr][jc]===null) return true;
+      }
+    }
+    return false;
+  }
+
+  function inBounds(r,c){ return r>=0 && r<SIZE && c>=0 && c<SIZE }
+
+  function switchTurn(){
+    turn = (turn==='black') ? 'red' : 'black';
+    turnLabel.textContent = turn==='black' ? 'Black (Teacher)' : 'Red (Student)';
+    log(`Now it's ${turn}'s turn.`);
+    updateUI();
+    // check for endgame
+    if(!hasAnyMoves(turn)){
+      log(`Game over — ${turn} has no legal moves. ${turn==='black' ? 'Red (Student)' : 'Black (Teacher)'} wins!`);
+      alert(`Game over — ${turn} has no legal moves. ${turn==='black' ? 'Red (Student)' : 'Black (Teacher)'} wins!`);
+    }
+  }
+
+  function hasAnyMoves(color){
+    for(let r=0;r<SIZE;r++){
+      for(let c=0;c<SIZE;c++){
+        const p = board[r][c]; if(!p || p.color!==color) continue;
+        // check any simple move or capture
+        const dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+        for(const [dr,dc] of dirs){
+          const nr = r+dr, nc = c+dc; const jr = r+2*dr, jc = c+2*dc;
+          if(inBounds(nr,nc) && board[nr][nc]===null){
+            // simple move valid only if king or correct forward direction
+            const forward = color==='black' ? -1 : 1;
+            if(p.king || dr===forward) return true;
+          }
+          if(inBounds(jr,jc) && board[jr][jc]===null){
+            const mid = board[r+dr][c+dc]; if(mid && mid.color!==color) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  function randInt(a,b){ return Math.floor(Math.random()*(b-a+1))+a }
+
+  restartBtn.addEventListener('click', ()=>{ if(confirm('Restart the game?')) initBoard(); });
+
+  // initialize
+  initBoard();
+  </script>
+</body>
+</html>
